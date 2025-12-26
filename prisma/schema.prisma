@@ -1,0 +1,186 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql" // 👈 เปลี่ยนตรงนี้ (เดิมเป็น sqlite)
+  url      = env("DATABASE_URL") // 👈 บรรทัด 9: แก้เป็นอันนี้ครับ!
+}
+
+// --- 1. Settings & Master Data ---
+
+model MasterUnit {
+  id    Int    @id @default(autoincrement())
+  name  String @unique
+}
+
+model StaffRole {
+  id        Int        @id @default(autoincrement())
+  name      String     @unique
+  resources Resource[]
+}
+
+// --- 2. Resource System ---
+
+model Resource {
+  id                Int               @id @default(autoincrement())
+  name              String
+  type              String // 'Staff', 'Room', 'Cage'
+  roleId            Int?
+  role              StaffRole?        @relation(fields: [roleId], references: [id])
+  staffBookings     Booking[]         @relation("StaffBooking")
+  roomBookings      Booking[]         @relation("RoomBooking")
+  staffTransactions TransactionItem[] @relation("StaffTransaction")
+  roomTransactions  TransactionItem[] @relation("RoomTransaction")
+}
+
+// --- 3. Inventory System (Complex Units) ---
+
+model Inventory {
+  id             Int      @id @default(autoincrement())
+  name           String
+  sku            String?  @map("barcode")
+  category       String?
+  type           String   @default("PRODUCT") // PRODUCT, SERVICE
+  price          Decimal  @default(0)
+  // ✅ ต้องมีบรรทัดนี้นะครับ!
+  isSellable   Boolean  @default(true)
+  costPrice      Decimal  @default(0)
+  stock          Int      @default(0)
+  
+  // Multi-Unit Config
+  unitLevel1     String   @default("ชิ้น") @map("unit_level1")
+  unitLevel2     String?  @map("unit_level2")
+  ratio2         Int?     @map("unit_ratio_2")
+  unitLevel3     String?  @map("unit_level3")
+  ratio3         Int?     @map("unit_ratio_3")
+  
+  // POS Logic
+  saleDeductQty  Decimal? @default(1) @map("sale_deduct_qty")
+  saleDeductUnit String?  @map("sale_deduct_unit")
+  isComposite    Boolean  @default(false) @map("is_composite")
+  
+  // Relations
+  ingredients      InventoryIngredient[] @relation("ParentItem")
+  usedIn           InventoryIngredient[] @relation("ChildItem")
+  bookings         Booking[]
+  transactionItems TransactionItem[]
+  
+  // ✅ Relation กับ StockLog (เพิ่มตรงนี้ที่เดียวจบ)
+  stockLogs        StockLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model InventoryIngredient {
+  id       Int       @id @default(autoincrement())
+  parentId Int
+  parent   Inventory @relation("ParentItem", fields: [parentId], references: [id])
+  childId  Int
+  child    Inventory @relation("ChildItem", fields: [childId], references: [id])
+  quantity Float     @map("qty_needed")
+  unitUsed String?
+
+  @@index([parentId])
+}
+
+// --- 4. Customer System ---
+
+model Customer {
+  id           Int           @id @default(autoincrement())
+  name         String
+  contactInfo  String?       @map("tel")
+  points       Int           @default(0)
+  birthDate    DateTime?
+  pets         Pet[]
+  bookings     Booking[]
+  transactions Transaction[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Pet {
+  id        Int      @id @default(autoincrement())
+  name      String
+  species   String?
+  breed     String?
+  birthDate DateTime?
+  medical   String?
+  photoUrl  String?
+  ownerId   Int
+  owner     Customer @relation(fields: [ownerId], references: [id])
+  bookings  Booking[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// --- 5. Booking System ---
+
+model Booking {
+  id          Int       @id @default(autoincrement())
+  startTime   DateTime
+  endTime     DateTime?
+  actualStart DateTime? @map("actualStartTime")
+  actualEnd   DateTime? @map("actualEndTime")
+  status      String    @default("PENDING")
+  notes       String?
+  customerId  Int
+  customer    Customer  @relation(fields: [customerId], references: [id])
+  petId       Int
+  pet         Pet       @relation(fields: [petId], references: [id])
+  serviceId   Int
+  service     Inventory @relation(fields: [serviceId], references: [id])
+  staffId     Int?
+  staff       Resource? @relation("StaffBooking", fields: [staffId], references: [id])
+  roomId      Int?
+  room        Resource? @relation("RoomBooking", fields: [roomId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// --- 6. Transaction System ---
+
+model Transaction {
+  id           Int               @id @default(autoincrement()) @map("tx_id")
+  total        Decimal           @map("total_amount")
+  paymentType  String?           @map("payment_type")
+  receiptType  String?           @map("receipt_type")
+  taxInfo      String?           @map("tax_info")
+  timestamp    DateTime          @default(now()) @map("date")
+  customerId   Int?              @map("customer_id")
+  customer     Customer?         @relation(fields: [customerId], references: [id])
+  customerName String?           @map("customer_name")
+  items        TransactionItem[]
+}
+
+model TransactionItem {
+  id            Int         @id @default(autoincrement())
+  transactionId Int
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+  inventoryId   Int
+  inventory     Inventory   @relation(fields: [inventoryId], references: [id])
+  name          String
+  quantity      Int         @map("qty")
+  price         Decimal
+  petId         Int?
+  petName       String?
+  staffId       Int?
+  staff         Resource?   @relation("StaffTransaction", fields: [staffId], references: [id])
+  roomId        Int?
+  room          Resource?   @relation("RoomTransaction", fields: [roomId], references: [id])
+}
+
+// --- 7. Stock Log System (เพิ่มท้ายสุด) ---
+
+model StockLog {
+  id          Int       @id @default(autoincrement())
+  action      String
+  quantity    Int       @map("qty")
+  reason      String?
+  inventoryId Int
+  inventory   Inventory @relation(fields: [inventoryId], references: [id])
+  createdAt   DateTime  @default(now()) @map("date")
+}
