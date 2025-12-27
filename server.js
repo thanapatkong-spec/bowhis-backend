@@ -1,10 +1,16 @@
 const express = require('express');
 const cors = require('cors');
-const { PrismaClient } = require('@prisma/client');
-
-const app = express();
-const prisma = new PrismaClient();
-const port = process.env.PORT || 3005;
+// ✅ แก้ไขการตั้งค่า CORS (สำคัญมาก)
+const corsOptions = {
+  origin: [
+    'http://localhost:56646', // อนุญาต Localhost (พอร์ตที่คุณรัน Flutter)
+    'http://localhost:3000',
+    'https://cheerful-hummingbird-de9e1f.netlify.app' // 👈 เพิ่มบรรทัดนี้! (ลิ้งค์ Netlify ของคุณ)
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // อนุญาตให้ส่งข้อมูล (POST) ได้
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+};
 
 app.use(cors());
 app.use(express.json());
