@@ -7,14 +7,27 @@ const prisma = new PrismaClient();
 const port = process.env.PORT || 3005;
 
 // ==========================================
-// 🛡️ Security & Config
+// 🛡️ Security & Config (Professional CORS)
 // ==========================================
 const corsOptions = {
-  origin: [
-    'http://localhost:56646',                        // เครื่องคุณ (Localhost Flutter)
-    'http://localhost:3000',                         // Web Browser Localhost
-    'https://cheerful-hummingbird-de9e1f.netlify.app' // 👈 เว็บจริง Netlify
-  ],
+  origin: function (origin, callback) {
+    // 1. อนุญาตให้ไม่มี origin (เช่น Mobile App, Postman)
+    if (!origin) return callback(null, true);
+
+    // 2. รายชื่อเว็บที่อนุญาต (Whitelist)
+    const allowedOrigins = [
+      'https://cheerful-hummingbird-de9e1f.netlify.app', // เว็บจริง Netlify
+      'http://localhost:3000'                             // Web Browser ทั่วไป
+    ];
+
+    // 3. Logic: อนุญาต Whitelist หรือ Localhost ทุกพอร์ต (แก้ปัญหา Flutter Port เปลี่ยน)
+    if (allowedOrigins.indexOf(origin) !== -1 || origin.startsWith('http://localhost:')) {
+      callback(null, true);
+    } else {
+      console.error(`Blocked by CORS: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -106,7 +119,7 @@ router.post('/inventory', async (req, res) => {
         await prisma.inventory.create({
             data: {
                 name: body.name, 
-                sku: body.barcode || "", // Default empty string if null
+                sku: body.barcode || "", 
                 price: parseFloat(body.price || 0), 
                 stock: parseInt(body.stock || 0),
                 unitLevel1: body.unit_level1, 
@@ -114,8 +127,9 @@ router.post('/inventory', async (req, res) => {
                 ratio2: parseInt(body.unit_ratio_2 || 0),
                 unitLevel3: body.unit_level3, 
                 ratio3: parseInt(body.unit_ratio_3 || 0),
-                saleDeductQty: parseFloat(body.sale_deduct_qty || 1),
-                saleDeductUnit: body.sale_deduct_unit,
+                // ✅ Integrity: รองรับทั้ง snake_case และ camelCase
+                saleDeductQty: parseFloat(body.sale_deduct_qty || body.saleDeductQty || 1),
+                saleDeductUnit: body.sale_deduct_unit || body.saleDeductUnit,
                 isComposite: body.is_composite,
                 ingredients: {
                     create: body.ingredients?.map(ing => ({
@@ -134,26 +148,27 @@ router.put('/inventory/:id', async (req, res) => {
         const body = req.body;
         const id = parseInt(req.params.id);
 
-        // ✅ Integrity: ใช้ Transaction เพื่อความปลอดภัยของข้อมูล
+        // ✅ Integrity: Transaction สำหรับการแก้ไขสินค้า
         await prisma.$transaction([
-            // 1. ลบส่วนผสมเดิม
+            // 1. ลบส่วนผสมเดิมทิ้งก่อน
             prisma.inventoryIngredient.deleteMany({ where: { parentId: id } }),
             // 2. อัปเดตข้อมูลและสร้างส่วนผสมใหม่
             prisma.inventory.update({
                 where: { id: id },
                 data: {
                     name: body.name, 
-                    sku: body.barcode,
+                    sku: body.barcode || body.sku,
                     price: parseFloat(body.price || 0), 
                     stock: parseInt(body.stock || 0),
-                    unitLevel1: body.unit_level1, 
-                    unitLevel2: body.unit_level2,
+                    unitLevel1: body.unit_level1 || body.unitLevel1, 
+                    unitLevel2: body.unit_level2 || body.unitLevel2,
                     ratio2: parseInt(body.unit_ratio_2 || 0),
-                    unitLevel3: body.unit_level3, 
+                    unitLevel3: body.unit_level3 || body.unitLevel3, 
                     ratio3: parseInt(body.unit_ratio_3 || 0),
-                    saleDeductQty: parseFloat(body.saleDeductQty || 1), // ใช้ชื่อ field ให้ตรงกับ Prisma Schema
-                    saleDeductUnit: body.saleDeductUnit,
-                    isComposite: body.is_composite,
+                    // ✅ Robust Data Mapping: รับค่าได้ทุกรูปแบบ
+                    saleDeductQty: parseFloat(body.saleDeductQty || body.sale_deduct_qty || 1),
+                    saleDeductUnit: body.saleDeductUnit || body.sale_deduct_unit,
+                    isComposite: body.is_composite || body.isComposite,
                     ingredients: {
                         create: body.ingredients?.map(ing => ({
                             childId: parseInt(ing.id), 
@@ -223,7 +238,7 @@ router.get('/stock-history', async (req, res) => {
 });
 
 // ==========================================
-// 👥 Customers (Fixed Mapping)
+// 👥 Customers
 // ==========================================
 router.get('/customers', async (req, res) => {
     try {
@@ -240,7 +255,6 @@ router.post('/customers', async (req, res) => {
         await prisma.customer.create({
             data: {
                 name: body.name, 
-                // ✅ Fix: รองรับทั้ง contactInfo (ใหม่) และ tel (เก่า) เพื่อความชัวร์
                 contactInfo: body.contactInfo || body.tel || "", 
                 points: parseInt(body.points || 0),
                 birthDate: body.birthDate ? new Date(body.birthDate) : null,
@@ -264,7 +278,6 @@ router.put('/customers/:id', async (req, res) => {
             where: { id: parseInt(req.params.id) }, 
             data: { 
                 name: req.body.name, 
-                // ✅ Fix: Mapping ให้ถูกต้องเหมือนขา create
                 contactInfo: body.contactInfo || body.tel, 
                 points: parseInt(body.points || 0)
             } 
@@ -343,7 +356,6 @@ router.post('/bookings', async (req, res) => {
     const end = new Date(body.endTime);
 
     try {
-        // 1. Check Conflict
         const conflict = await prisma.booking.findFirst({
             where: {
                 OR: [
@@ -362,7 +374,6 @@ router.post('/bookings', async (req, res) => {
             return res.status(409).json({ success: false, message: 'ช่วงเวลาชนกับนัดหมายอื่น (พนักงานหรือห้องไม่ว่าง)' });
         }
 
-        // 2. Save
         await prisma.booking.create({
             data: {
                 customerId: parseInt(body.customerId), 
@@ -392,17 +403,15 @@ router.put('/bookings/:id', async (req, res) => {
 });
 
 // ==========================================
-// 🛒 POS & Checkout (Transaction Integrity)
+// 🛒 POS & Checkout
 // ==========================================
 router.post('/orders', async (req, res) => {
     const { items, total, customerId, customerName, paymentType, receiptType, taxInfo } = req.body;
     
-    // Validation
     if (!items || items.length === 0) return res.status(400).json({ success: false, message: "ไม่มีสินค้าในตะกร้า" });
 
     try {
         const result = await prisma.$transaction(async (tx) => {
-            // 1. Create Transaction
             const newTx = await tx.transaction.create({
                 data: {
                     total: parseFloat(total), 
@@ -415,7 +424,6 @@ router.post('/orders', async (req, res) => {
                 }
             });
 
-            // 2. Process Items & Deduct Stock
             for (const item of items) {
                 const qtySold = parseInt(item.qty);
                 const itemId = parseInt(item.id);
@@ -434,7 +442,6 @@ router.post('/orders', async (req, res) => {
                     }
                 });
 
-                // Stock Logic
                 const product = await tx.inventory.findUnique({ where: { id: itemId }, include: { ingredients: true } });
                 
                 if (product) {
@@ -442,8 +449,6 @@ router.post('/orders', async (req, res) => {
                         for (const ing of product.ingredients) {
                             const totalDeduct = ing.quantity * qtySold;
                             await tx.inventory.update({ where: { id: ing.childId }, data: { stock: { decrement: totalDeduct } } });
-                            
-                            // Log Ingredient Deduction
                             await tx.stockLog.create({ 
                                 data: { action: 'SALE', quantity: Math.round(totalDeduct), reason: `Sold via TX #${newTx.id}`, inventoryId: ing.childId } 
                             });
@@ -451,8 +456,6 @@ router.post('/orders', async (req, res) => {
                     } else {
                         const deduct = parseFloat(product.saleDeductQty || 1) * qtySold;
                         await tx.inventory.update({ where: { id: itemId }, data: { stock: { decrement: deduct } } });
-                        
-                        // Log Item Deduction
                         await tx.stockLog.create({ 
                             data: { action: 'SALE', quantity: Math.round(deduct), reason: `Sold via TX #${newTx.id}`, inventoryId: itemId } 
                         });
@@ -482,7 +485,10 @@ router.get('/transactions', async (req, res) => {
 
 router.post('/login', (req, res) => res.json({ success: true, user: { name: "Admin", token: "mock" } }));
 
-// Start Server
 app.listen(port, () => {
     console.log(`🚀 Professional Server running on port ${port}`);
+    // Check Database connection on startup
+    prisma.$connect()
+        .then(() => console.log('✅ Database connected successfully'))
+        .catch((e) => console.error('❌ Database connection failed:', e));
 });
