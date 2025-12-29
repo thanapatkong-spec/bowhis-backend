@@ -356,38 +356,57 @@ router.post('/bookings', async (req, res) => {
     const end = new Date(body.endTime);
 
     try {
-        const conflict = await prisma.booking.findFirst({
-            where: {
-                OR: [
-                    { staffId: body.staffId ? parseInt(body.staffId) : undefined },
-                    { roomId: body.roomId ? parseInt(body.roomId) : undefined }
-                ],
-                status: { not: 'Cancelled' },
-                AND: [
-                    { startTime: { lt: end } },
-                    { endTime: { gt: start } }
-                ]
-            }
-        });
+        // ---------------------------------------------------------
+        // 1. INTEGRITY CHECK: เช็คคิวชนเหมือนเดิม (ห้ามลบทิ้ง)
+        // ---------------------------------------------------------
+        // ถ้ามีการระบุ Staff หรือ Room มา ต้องเช็คว่าว่างไหม
+        if (body.staffId || body.roomId) {
+            const conflict = await prisma.booking.findFirst({
+                where: {
+                    OR: [
+                        { staffId: body.staffId ? parseInt(body.staffId) : undefined },
+                        { roomId: body.roomId ? parseInt(body.roomId) : undefined }
+                    ],
+                    status: { not: 'Cancelled' }, // ไม่นับเคสที่ยกเลิกไปแล้ว
+                    AND: [
+                        { startTime: { lt: end } },
+                        { endTime: { gt: start } }
+                    ]
+                }
+            });
 
-        if (conflict) {
-            return res.status(409).json({ success: false, message: 'ช่วงเวลาชนกับนัดหมายอื่น (พนักงานหรือห้องไม่ว่าง)' });
+            if (conflict) {
+                return res.status(409).json({ success: false, message: 'ช่วงเวลาชนกับนัดหมายอื่น (พนักงานหรือห้องไม่ว่าง)' });
+            }
         }
 
-        await prisma.booking.create({
+        // ---------------------------------------------------------
+        // 2. DATA MAPPING: บันทึกข้อมูลลงฐาน (เพิ่ม notes แล้ว!)
+        // ---------------------------------------------------------
+        const newBooking = await prisma.booking.create({
             data: {
                 customerId: parseInt(body.customerId), 
                 petId: parseInt(body.petId), 
                 serviceId: parseInt(body.serviceId),
                 staffId: body.staffId ? parseInt(body.staffId) : null,
                 roomId: body.roomId ? parseInt(body.roomId) : null,
+                
                 startTime: start, 
                 endTime: end,
-                status: body.status || 'Confirmed'
-            }
-        });
-        res.json({ success: true });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+                status: body.status || 'Confirmed',
+                
+                // ✅ เพิ่มบรรทัดนี้ครับ (พระเอกของเรา)
+                notes: body.notes || null 
+    }
+});
+
+        // ส่งข้อมูลที่สร้างเสร็จกลับไป (เผื่อ Frontend จะเอาไปใช้แสดงผลทันที)
+        res.json(newBooking);
+
+    } catch (e) { 
+        console.error("Create Booking Error:", e);
+        res.status(500).json({ error: e.message }); 
+    }
 });
 
 router.put('/bookings/:id', async (req, res) => {
